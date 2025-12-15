@@ -1,26 +1,30 @@
+const axios = require("axios");
 const express = require("express");
+const bodyParser = require("body-parser");
+const db = require("./db");
+
 const app = express();
 const cors = require("cors");
-const MongoClient = require("mongodb").MongoClient;
 require("dotenv").config();
 
-let db,
-  dbConnectionString = process.env.DB_STRING,
-  dbName = "sample_analytics",
-  collection;
+// controllers
+const restaurantsController = require("./api/restaurants/restaurantsController");
 
-MongoClient.connect(dbConnectionString).then((client) => {
-  console.log(`Connected to the ${dbName} database`);
-  db = client.db(dbName);
-  collection = db.collection("");
-});
+app.set("view engine", "ejs");
+app.use(express.static("public"));
+app.use(express.urlencoded({ extended: true }));
+app.use(express.json());
+app.use(cors());
 
-app.set('view engine', 'ejs')
-app.use(express.static('public'))
-app.use(express.urlencoded({extended: true}))
-app.use(express.json())
-app.use(cors())
+app.use(`/api/restaurants`, restaurantsController);
 
-app.listen(process.env.PORT || PORT, () => {
-  console.log(`Go catch the server at PORT ${process.env.PORT || PORT}`);
-});
+db.connectToServer()
+  .then(() => {
+    app.listen(process.env.PORT, () => {
+      console.log(`Server is running on port ${process.env.PORT}`);
+    });
+  })
+  .catch((err) => {
+    console.error("Could not start server:", err);
+    process.exit(1); // Exit if DB connection fails
+  });
