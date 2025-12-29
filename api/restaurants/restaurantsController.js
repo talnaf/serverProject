@@ -22,17 +22,129 @@ const upload = multer({
 
 /**
  * GET /
- * Retrieves a list of restaurants from the database.
+ * Retrieves a list of restaurants from the database with optional pagination.
  *
  * @route GET /
- * @returns {Array} An array of up to 50 restaurant documents
- * @returns {Object} 200 - Success response with restaurant data
+ * @param {number} req.query.page - Page number (default: 1)
+ * @param {number} req.query.limit - Number of results per page (default: 50, max: 100)
+ * @returns {Object} 200 - Paginated results with metadata
+ * @returns {Object} 500 - Internal server error
  */
 router.get("/", async (req, res) => {
-  const database = db.getDb();
-  let collection = await database.collection("restaurants");
-  let results = await collection.find({}).limit(50).toArray();
-  res.send(results).status(200);
+  try {
+    const database = db.getDb();
+    const collection = await database.collection("restaurants");
+
+    // Extract pagination parameters
+    const { page = 1, limit = 50 } = req.query;
+
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100); // Max 100 results per page
+    const skip = (pageNum - 1) * limitNum;
+
+    // Execute query with pagination
+    const results = await collection
+      .find({})
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    // Get total count for pagination metadata
+    const totalCount = await collection.countDocuments({});
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    res.status(200).send({
+      restaurants: results,
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        totalResults: totalCount,
+        resultsPerPage: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      }
+    });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch restaurants", details: error.message });
+  }
+});
+
+/**
+ * GET /search
+ * Searches and retrieves restaurants with query filters and pagination.
+ *
+ * @route GET /search
+ * @param {string} req.query.field - Field to search in (name, cuisine, address)
+ * @param {string} req.query.query - Search term (case-insensitive partial match)
+ * @param {number} req.query.page - Page number (default: 1)
+ * @param {number} req.query.limit - Number of results per page (default: 10, max: 100)
+ * @param {string} req.query.sortBy - Field to sort by (default: "name")
+ * @param {string} req.query.sortOrder - Sort order: "asc" or "desc" (default: "asc")
+ * @returns {Object} 200 - Paginated results with metadata
+ * @returns {Object} 400 - Bad request if field is invalid
+ * @returns {Object} 500 - Internal server error
+ */
+router.get("/search", async (req, res) => {
+  try {
+    const database = db.getDb();
+    const collection = await database.collection("restaurants");
+
+    // Extract query parameters
+    const { field, query, page = 1, limit = 10, sortBy = "name", sortOrder = "asc" } = req.query;
+
+    // Build query filter
+    const filter = {};
+
+    if (field && query) {
+      // Validate field to prevent injection
+      const allowedFields = ["name", "cuisine", "address"];
+      if (!allowedFields.includes(field)) {
+        return res.status(400).send({
+          error: "Invalid field parameter",
+          message: `Field must be one of: ${allowedFields.join(", ")}`
+        });
+      }
+
+      // Add regex search for the specified field
+      filter[field] = { $regex: query, $options: "i" }; // Case-insensitive partial match
+    }
+
+    // Pagination
+    const pageNum = parseInt(page);
+    const limitNum = Math.min(parseInt(limit), 100); // Max 100 results per page
+    const skip = (pageNum - 1) * limitNum;
+
+    // Sorting
+    const sortOptions = {};
+    sortOptions[sortBy] = sortOrder === "desc" ? -1 : 1;
+
+    // Execute query with pagination
+    const results = await collection
+      .find(filter)
+      .sort(sortOptions)
+      .skip(skip)
+      .limit(limitNum)
+      .toArray();
+
+    // Get total count for pagination metadata
+    const totalCount = await collection.countDocuments(filter);
+    const totalPages = Math.ceil(totalCount / limitNum);
+
+    res.status(200).send({
+      restaurants: results,
+      pagination: {
+        currentPage: pageNum,
+        totalPages: totalPages,
+        totalResults: totalCount,
+        resultsPerPage: limitNum,
+        hasNextPage: pageNum < totalPages,
+        hasPrevPage: pageNum > 1
+      }
+    });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to search restaurants", details: error.message });
+  }
 });
 
 /**
