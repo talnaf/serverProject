@@ -34,10 +34,10 @@ router.post("/", async (req, res) => {
     }
 
     // Validate role
-    if (!["user", "manager"].includes(role)) {
+    if (!["user", "restaurantOwner"].includes(role)) {
       return res.status(400).send({
         error: "Invalid role",
-        message: "Role must be either 'user' or 'manager'"
+        message: "Role must be either 'user' or 'restaurantOwner'"
       });
     }
 
