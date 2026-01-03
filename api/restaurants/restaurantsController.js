@@ -356,6 +356,44 @@ router.get("/owner/:ownerId", async (req, res) => {
 });
 
 /**
+ * GET /:id
+ * Retrieves a single restaurant by its ID.
+ *
+ * @route GET /:id
+ * @param {string} req.params.id - The MongoDB ObjectId of the restaurant
+ * @returns {Object} 200 - Restaurant data if found
+ * @returns {Object} 400 - Bad request if restaurant ID is invalid
+ * @returns {Object} 404 - Restaurant not found
+ * @returns {Object} 500 - Internal server error
+ */
+router.get("/:id", async (req, res) => {
+  try {
+    const database = db.getDb();
+    const collection = await database.collection("restaurants");
+
+    // Validate ObjectId format
+    if (!ObjectId.isValid(req.params.id)) {
+      return res.status(400).send({ error: "Invalid restaurant ID format" });
+    }
+
+    const restaurant = await collection.findOne({ _id: new ObjectId(req.params.id) });
+
+    if (!restaurant) {
+      return res.status(404).send({
+        error: "Restaurant not found",
+        message: "No restaurant exists with this ID"
+      });
+    }
+
+    res.status(200).send({
+      restaurant
+    });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch restaurant", details: error.message });
+  }
+});
+
+/**
  * POST /:id/picture
  * Uploads a picture for a restaurant and stores it in MongoDB GridFS.
  * The picture is stored in chunks and the file ID is saved to the restaurant document.
