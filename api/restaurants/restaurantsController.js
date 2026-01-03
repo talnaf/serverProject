@@ -43,9 +43,10 @@ router.get("/", async (req, res) => {
     const limitNum = Math.min(parseInt(limit), 100); // Max 100 results per page
     const skip = (pageNum - 1) * limitNum;
 
-    // Execute query with pagination
+    // Execute query with pagination, sorted by searchScore (descending)
     const results = await collection
       .find({})
+      .sort({ searchScore: -1 }) // Sort by searchScore descending (highest first)
       .skip(skip)
       .limit(limitNum)
       .toArray();
@@ -115,8 +116,10 @@ router.get("/search", async (req, res) => {
     const limitNum = Math.min(parseInt(limit), 100); // Max 100 results per page
     const skip = (pageNum - 1) * limitNum;
 
-    // Sorting
-    const sortOptions = {};
+    // Sorting - primary sort by searchScore (descending), secondary sort by user-specified field
+    const sortOptions = {
+      searchScore: -1, // Always sort by searchScore first (highest first)
+    };
     sortOptions[sortBy] = sortOrder === "desc" ? -1 : 1;
 
     // Execute query with pagination
@@ -155,8 +158,9 @@ router.get("/search", async (req, res) => {
  * @param {Object} req.body - The restaurant data to create
  * @param {string} req.body.name - Restaurant name (required)
  * @param {string} req.body.cuisine - Type of cuisine (required)
+ * @param {string} req.body.ownerId - Firebase UID of restaurant owner (required)
  * @returns {Object} 201 - Success response with created restaurant ID
- * @returns {Object} 400 - Bad request if required fields are missing
+ * @returns {Object} 400 - Bad request if required fields are missing or owner already has a restaurant
  * @returns {Object} 500 - Internal server error
  */
 router.post("/", async (req, res) => {
@@ -164,7 +168,29 @@ router.post("/", async (req, res) => {
     const database = db.getDb();
     const collection = await database.collection("restaurants");
 
-    const newRestaurant = req.body;
+    const { ownerId, ...restaurantData } = req.body;
+
+    // Validate ownerId is provided
+    if (!ownerId) {
+      return res.status(400).send({ error: "ownerId is required" });
+    }
+
+    // Check if owner already has a restaurant
+    const existingRestaurant = await collection.findOne({ ownerId });
+    if (existingRestaurant) {
+      return res.status(400).send({
+        error: "Restaurant owner already has a restaurant",
+        message: "Each restaurant owner can only manage one restaurant"
+      });
+    }
+
+    // Create new restaurant with ownerId and initial searchScore
+    const newRestaurant = {
+      ...restaurantData,
+      ownerId,
+      searchScore: 10, // Initial search score for new restaurants
+      createdAt: new Date()
+    };
 
     const result = await collection.insertOne(newRestaurant);
 
@@ -184,8 +210,10 @@ router.post("/", async (req, res) => {
  * @route PATCH /:id
  * @param {string} req.params.id - The MongoDB ObjectId of the restaurant to update
  * @param {Object} req.body - The fields to update in the restaurant document
+ * @param {string} req.body.ownerId - Firebase UID of the requesting owner (required for authorization)
  * @returns {Object} 200 - Success response with update result
  * @returns {Object} 400 - Bad request if restaurant ID is invalid
+ * @returns {Object} 403 - Forbidden if user is not the restaurant owner
  * @returns {Object} 404 - Restaurant not found
  * @returns {Object} 500 - Internal server error
  */
@@ -200,14 +228,33 @@ router.patch("/:id", async (req, res) => {
       return res.status(400).send({ error: "Invalid restaurant ID format" });
     }
 
-    const query = { _id: new ObjectId(req.params.id) };
-    const updates = { $set: req.body };
+    // Extract ownerId from request body (sent by frontend for authorization)
+    const { ownerId, ...updateData } = req.body;
 
-    const result = await collection.updateOne(query, updates);
+    if (!ownerId) {
+      return res.status(400).send({ error: "ownerId is required for authorization" });
+    }
 
-    if (result.matchedCount === 0) {
+    // Find the restaurant and verify ownership
+    const restaurant = await collection.findOne({ _id: new ObjectId(req.params.id) });
+
+    if (!restaurant) {
       return res.status(404).send({ error: "Restaurant not found" });
     }
+
+    if (restaurant.ownerId !== ownerId) {
+      return res.status(403).send({
+        error: "Forbidden",
+        message: "You can only edit your own restaurant"
+      });
+    }
+
+    // Update the restaurant (excluding ownerId from updates to prevent changing ownership)
+    const updates = { $set: updateData };
+    const result = await collection.updateOne(
+      { _id: new ObjectId(req.params.id) },
+      updates
+    );
 
     res.status(200).send({
       message: "Restaurant updated successfully",
@@ -224,8 +271,10 @@ router.patch("/:id", async (req, res) => {
  *
  * @route DELETE /:id
  * @param {string} req.params.id - The MongoDB ObjectId of the restaurant to delete
+ * @param {string} req.query.ownerId - Firebase UID of the requesting owner (required for authorization)
  * @returns {Object} 200 - Success response confirming deletion
  * @returns {Object} 400 - Bad request if restaurant ID is invalid
+ * @returns {Object} 403 - Forbidden if user is not the restaurant owner
  * @returns {Object} 404 - Restaurant not found
  * @returns {Object} 500 - Internal server error
  */
@@ -239,12 +288,29 @@ router.delete("/:id", async (req, res) => {
       return res.status(400).send({ error: "Invalid restaurant ID format" });
     }
 
-    const query = { _id: new ObjectId(req.params.id) };
-    const result = await collection.deleteOne(query);
+    // Get ownerId from query parameters for authorization
+    const { ownerId } = req.query;
 
-    if (result.deletedCount === 0) {
+    if (!ownerId) {
+      return res.status(400).send({ error: "ownerId is required for authorization" });
+    }
+
+    // Find the restaurant and verify ownership
+    const restaurant = await collection.findOne({ _id: new ObjectId(req.params.id) });
+
+    if (!restaurant) {
       return res.status(404).send({ error: "Restaurant not found" });
     }
+
+    if (restaurant.ownerId !== ownerId) {
+      return res.status(403).send({
+        error: "Forbidden",
+        message: "You can only delete your own restaurant"
+      });
+    }
+
+    // Delete the restaurant
+    const result = await collection.deleteOne({ _id: new ObjectId(req.params.id) });
 
     res.status(200).send({
       message: "Restaurant deleted successfully",
@@ -252,6 +318,40 @@ router.delete("/:id", async (req, res) => {
     });
   } catch (error) {
     res.status(500).send({ error: "Failed to delete restaurant", details: error.message });
+  }
+});
+
+/**
+ * GET /owner/:ownerId
+ * Retrieves a restaurant by owner UID.
+ *
+ * @route GET /owner/:ownerId
+ * @param {string} req.params.ownerId - The Firebase UID of the restaurant owner
+ * @returns {Object} 200 - Restaurant data if found
+ * @returns {Object} 404 - No restaurant found for this owner
+ * @returns {Object} 500 - Internal server error
+ */
+router.get("/owner/:ownerId", async (req, res) => {
+  try {
+    const database = db.getDb();
+    const collection = await database.collection("restaurants");
+
+    const { ownerId } = req.params;
+
+    const restaurant = await collection.findOne({ ownerId });
+
+    if (!restaurant) {
+      return res.status(404).send({
+        error: "No restaurant found",
+        message: "This owner does not have a restaurant yet"
+      });
+    }
+
+    res.status(200).send({
+      restaurant
+    });
+  } catch (error) {
+    res.status(500).send({ error: "Failed to fetch restaurant", details: error.message });
   }
 });
 
